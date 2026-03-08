@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>归档管理系统</title>
+    <link rel="stylesheet" href="/db-archive/static/style.css">
+    <script defer src="/db-archive/static/alpinejs.min.js"></script>
+</head>
+<body x-data="archiveApp">
+<div class="header">
+    <div class="logo">归档管理</div>
+    <div class="nav">
+        <template x-for="cat in ['datasource', 'job', 'task']">
+            <div class="nav-item"
+                 :class="{ active: currentCategory === cat }"
+                 @click="switchPage(cat)"
+                 x-text="UI_CONFIG[cat].title"></div>
+        </template>
+    </div>
+</div>
+
+<div class="container">
+    <div class="toolbar">
+        <div class="toolbar-left" style="display: flex; gap: 12px; align-items: center; flex: 1;">
+            <template x-if="currentCategory === 'task' || currentCategory === 'detail'">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <span style="font-size: 13px; color: var(--text-regular); font-weight: 500;">创建时间:</span>
+                    <div style="display: flex; align-items: center; gap: 4px;">
+                        <input type="date" class="search-input" style="width: 145px;" x-model.lazy="startDate">
+                        <span style="color: #909399;">至</span>
+                        <input type="date" class="search-input" style="width: 145px;" x-model.lazy="endDate">
+                    </div>
+                </div>
+            </template>
+
+            <template x-if="filterState[currentCategory].value !== null">
+                <div id="filter-tag-wrap">
+                    <div class="link-filter-tag">
+                        <span x-text="`${filterState[currentCategory].key}=${filterState[currentCategory].value}`"></span>
+                        <span style="cursor:pointer" @click="clearLinkFilter()">&times;</span>
+                    </div>
+                </div>
+            </template>
+
+            <template x-if="currentCategory === 'job' || currentCategory === 'task'">
+                <div style="display: flex; gap: 8px;">
+                    <template x-if="currentCategory === 'task'">
+                        <div class="input-wrapper" >
+                            <input type="text" class="search-input" style="width: 100px;" placeholder="周期调度ID" x-model="filterParams[currentCategory].job_id">
+                            <span class="clear-btn" x-show="filterParams[currentCategory].job_id" @click="filterParams[currentCategory].job_id = ''">&times;</span>
+                        </div>
+                    </template>
+
+                    <div class="input-wrapper">
+                        <input type="text" class="search-input" style="width: 200px;" placeholder="任务名称" x-model="filterParams[currentCategory].name">
+                        <span class="clear-btn" x-show="filterParams[currentCategory].name" @click="filterParams[currentCategory].name = ''">&times;</span>
+                    </div>
+                    <div class="input-wrapper">
+                        <input type="text" class="search-input" style="width: 160px;" placeholder="源库名" x-model="filterParams[currentCategory].source_db">
+                        <span class="clear-btn" x-show="filterParams[currentCategory].source_db" @click="filterParams[currentCategory].source_db = ''">&times;</span>
+                    </div>
+                    <div class="input-wrapper">
+                        <input type="text" class="search-input" style="width: 200px;" placeholder="源表名" x-model="filterParams[currentCategory].source_table">
+                        <span class="clear-btn" x-show="filterParams[currentCategory].source_table" @click="filterParams[currentCategory].source_table = ''">&times;</span>
+                    </div>
+
+                </div>
+            </template>
+
+            <div class="input-wrapper">
+                <input type="text" class="search-input" placeholder="模糊搜索..." x-model="filterText">
+                <span class="clear-btn" x-show="filterText" @click="filterText = ''">&times;</span>
+            </div>
+            
+            <button class="btn primary refresh-btn" :class="{ refreshing: isRefreshing }" @click="refreshCurrentPage()">
+                <span>查询</span>
+            </button>
+            <button class="btn" @click="resetFilters()">重置</button>
+        </div>
+        <button class="btn primary" x-show="UI_CONFIG[currentCategory].editFields.length > 0" @click="openEditModal()">
+            新增
+        </button>
+    </div>
+
+    <div class="table-wrap">
+        <table>
+            <thead>
+            <tr>
+                <template x-for="col in UI_CONFIG[currentCategory].columns">
+                    <th x-text="col.label"></th>
+                </template>
+                <th x-show="UI_CONFIG[currentCategory].editFields.length > 0">操作</th>
+            </tr>
+            </thead>
+            <tbody>
+            <template x-for="row in pagedData()" :key="row.id">
+                <tr>
+                    <template x-for="col in UI_CONFIG[currentCategory].columns">
+                        <td x-html="formatCell(row, col)"></td>
+                    </template>
+                    <td x-show="UI_CONFIG[currentCategory].editFields.length > 0">
+                        <span class="action-btn" @click="openEditModal(row.id)">编辑</span>
+                        <span class="action-btn danger" @click="confirmDeleteModal(row.id)">删除</span>
+                    </td>
+                </tr>
+            </template>
+            </tbody>
+        </table>
+        <div class="pagination">
+            <div class="page-info" x-text="`共 ${totalItems()} 条记录`"></div>
+            <button class="page-btn" :disabled="page <= 1" @click="page--">&lt;</button>
+            <template x-for="p in totalPages()">
+                <button class="page-btn" :class="{ active: p === page }" @click="page = p" x-text="p"></button>
+            </template>
+            <button class="page-btn" :disabled="page >= totalPages()" @click="page++">&gt;</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal-overlay" :style="{ display: showEditModal ? 'flex' : 'none' }">
+    <div class="modal-content" :style="{ width: UI_CONFIG[currentCategory].modalWidth || '620px' }">
+        <div class="modal-header">
+            <span x-text="(currentId ? '编辑' : '新增') + UI_CONFIG[currentCategory].title"></span>
+            <span class="modal-close" @click="showEditModal = false">&times;</span>
+        </div>
+        <div class="modal-body">
+            <template x-for="f in UI_CONFIG[currentCategory].editFields">
+                <div class="form-item"
+                     :class="[`col-${f.col || 6}`, f.type === 'checkbox' ? 'col-en' : '', f.required ? 'is-required' : '']">
+                    <label x-text="f.type === 'checkbox' ? '' : f.label"></label>
+
+                    <template x-if="f.type === 'number'">
+                        <input type="number"
+                               x-model.number="formData[f.name]"
+                               :placeholder="`请输入${f.label}`">
+                    </template>
+
+                    <template x-if="['text', 'password'].includes(f.type)">
+                        <input :type="f.type"
+                               x-model="formData[f.name]"
+                               :placeholder="`请输入${f.label}`">
+                    </template>
+
+<!--                    <template x-if="f.type === 'select'">-->
+<!--                        <select x-model="formData[f.name]">-->
+<!--                            <option value="" disabled selected>请选择</option>-->
+<!--                            <template x-for="opt in f.options">-->
+<!--                                <option :value="opt" x-text="opt"></option>-->
+<!--                            </template>-->
+<!--                        </select>-->
+<!--                    </template>-->
+
+                    <template x-if="f.type === 'select'">
+                        <select x-model="formData[f.name]" :disabled="f.name === 'write_mode' && formData.archive_mode === 'delete_only'">
+                            <option value="" disabled selected>请选择</option>
+                            <template x-for="opt in f.options">
+                                <option :value="opt" x-text="opt"></option>
+                            </template>
+                        </select>
+                    </template>
+
+                    <template x-if="f.type === 'textarea'">
+                        <textarea x-model="formData[f.name]" :placeholder="`请输入${f.label}`"></textarea>
+                    </template>
+
+                    <template x-if="f.type === 'checkbox'">
+                        <div class="el-checkbox-wrapper" @click="formData[f.name] = (formData[f.name] === 1 ? 0 : 1)">
+                            <input type="checkbox" :checked="formData[f.name] === 1">
+                            <span x-text="f.label"></span>
+                        </div>
+                    </template>
+
+                    <template x-if="f.type === 'datasourceSelect'">
+                        <div class="el-select-wrapper" x-data="{ open: false, search: '' }" @click.away="open = false">
+                            <div class="el-input-wrapper" @click="open = !open">
+                                <input type="text" class="el-select-input" readonly
+                                       :value="getDsDisplay(formData[f.name])" placeholder="请选择数据源">
+                                <span class="el-select-caret">▼</span>
+                            </div>
+                            <div class="el-select-dropdown" x-show="open" style="display: flex;">
+                                <div class="el-select-search-wrap">
+                                    <input type="text" class="el-select-filter" x-model="search"
+                                           placeholder="关键字过滤...">
+                                </div>
+
+                                <div class="el-select-list">
+                                    <template x-for="ds in db.datasource.filter(d => {
+                                        // 1. 模糊搜索过滤
+                                        const matchesSearch = JSON.stringify(d).toLowerCase().includes(search.toLowerCase());
+
+                                        // 2. 角色权限过滤 (source/sink/both)
+                                        const matchesRole = !f.roleFilter || f.roleFilter.includes(d.role);
+
+                                        // 3. 启用状态过滤：只显示 is_enabled 为 1 的实例
+                                        // 注意：根据后端返回类型，可能是数字 1 或布尔值 true
+                                        const isEnabled = d.is_enabled == 1 || d.is_enabled === true;
+
+                                        return matchesSearch && matchesRole && isEnabled;
+                                    })">
+                                        <div class="el-select-option" :class="{ selected: formData[f.name] == ds.id }"
+                                             @click="formData[f.name] = ds.id; open = false">
+                                            <span x-text="`[${ds.db_type}] ${ds.host}:${ds.port} (${ds.name})`"></span>
+                                        </div>
+                                    </template>
+                                </div>
+
+
+                            </div>
+                        </div>
+                    </template>
+
+
+
+                </div>
+            </template>
+        </div>
+
+
+        <div class="modal-footer">
+            <button class="btn warning" x-show="UI_CONFIG[currentCategory].showTestBtn" @click="testConnection()">
+                测试连接
+            </button>
+
+            <button class="btn warning" x-show="currentCategory === 'job' || currentCategory === 'task'" @click="testConfig()">
+                检查配置
+            </button>
+
+            <div style="margin-left:auto; display:flex; gap:12px;">
+                <button class="btn" @click="showEditModal = false">取消</button>
+                <button class="btn primary" @click="handleSave()">保存</button>
+            </div>
+        </div>
+
+
+    </div>
+</div>
+
+<div class="modal-overlay" :style="{ display: showConfirmModal ? 'flex' : 'none' }">
+    <div class="modal-content modal-sm">
+        <div class="modal-header" x-text="confirmTitle"></div>
+        <div class="modal-body" x-html="confirmBody"></div>
+        <div class="modal-footer">
+            <button class="btn" @click="showConfirmModal = false">取消</button>
+            <button class="btn primary danger-btn" :style="{ background: confirmBtnColor }" @click="confirmAction()">
+                确认
+            </button>
+        </div>
+    </div>
+</div>
+
+<script src="/db-archive/static/config.js"></script>
+<script src="/db-archive/static/app.js"></script>
+</body>
+</html>
